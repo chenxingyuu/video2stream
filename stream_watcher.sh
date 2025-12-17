@@ -40,11 +40,16 @@ fi
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 
 # 轮询模式下的处理状态记录目录（不再移动源视频文件）
-#  - STATE_DIR/processed.list 记录已成功推流的文件（绝对路径）
-#  - STATE_DIR/failed.list    记录推流失败的文件（绝对路径）
+#  - STATE_DIR/processed.list   记录已成功推流的文件（绝对路径）
+#  - STATE_DIR/failed.list      记录推流失败的文件（绝对路径）
+#  - STATE_DIR/in_progress.list 记录正在推流中的文件（绝对路径）
 STATE_DIR="${VIDEO_DIR}/.state"
 PROCESSED_LIST="${STATE_DIR}/processed.list"
 FAILED_LIST="${STATE_DIR}/failed.list"
+IN_PROGRESS_LIST="${STATE_DIR}/in_progress.list"
+
+# ffmpeg 日志目录（按文件名输出到独立日志，避免刷屏 docker 日志）
+FFMPEG_LOG_DIR="${STATE_DIR}/ffmpeg_logs"
 
 # 存放每个文件对应推流 PID 的目录（仅 fswatch 事件模式使用）
 # 会把文件路径做简单转义作为文件名，内容为对应 ffmpeg 的 PID
@@ -84,6 +89,10 @@ ensure_directories() {
     mkdir -p "$STATE_DIR"
   fi
 
+  if [[ ! -d "$FFMPEG_LOG_DIR" ]]; then
+    mkdir -p "$FFMPEG_LOG_DIR"
+  fi
+
   # 状态文件如果不存在则创建为空文件
   if [[ ! -f "$PROCESSED_LIST" ]]; then
     : > "$PROCESSED_LIST"
@@ -91,6 +100,10 @@ ensure_directories() {
 
   if [[ ! -f "$FAILED_LIST" ]]; then
     : > "$FAILED_LIST"
+  fi
+
+  if [[ ! -f "$IN_PROGRESS_LIST" ]]; then
+    : > "$IN_PROGRESS_LIST"
   fi
 }
 
@@ -118,6 +131,11 @@ mark_file_in_list() {
   if ! is_file_in_list "$list" "$file"; then
     printf '%s\n' "$file" >> "$list"
   fi
+}
+
+mark_file_in_progress() {
+  local file="$1"
+  mark_file_in_list "$IN_PROGRESS_LIST" "$file"
 }
 
 build_stream_url_for_file() {
@@ -185,7 +203,7 @@ stop_stream_if_running() {
 
 start_stream_background() {
   local file="$1"
-  local pid_file pid stream_url
+  local pid_file pid stream_url log_file cmd
 
   pid_file=$(pidfile_for_path "$file")
 
@@ -195,11 +213,16 @@ start_stream_background() {
   echo "开始推流文件（后台运行）: $file"
 
   stream_url=$(build_stream_url_for_file "$file")
+  log_file="${FFMPEG_LOG_DIR}/$(basename -- "$file").log"
 
-  "$FFMPEG_BIN" -re -stream_loop -1 -i "$file" \
+  cmd="$FFMPEG_BIN -re -stream_loop -1 -i \"$file\" -c:v libx264 -preset veryfast -tune zerolatency -c:a aac -ar 44100 -ac 2 -b:a 128k -f flv \"$stream_url\""
+  echo "FFMPEG_CMD (background): $cmd > \"$log_file\" 2>&1"
+
+  # 实际执行时将 ffmpeg 日志写入独立文件，避免刷屏 docker 日志
+  $FFMPEG_BIN -re -stream_loop -1 -i "$file" \
     -c:v libx264 -preset veryfast -tune zerolatency \
     -c:a aac -ar 44100 -ac 2 -b:a 128k \
-    -f flv "$stream_url" &
+    -f flv "$stream_url" >"$log_file" 2>&1 &
 
   pid=$!
   echo "$pid" > "$pid_file"
@@ -211,8 +234,10 @@ find_next_video_file() {
   local f
   for f in "$VIDEO_DIR"/*; do
     if [[ -f "$f" ]] && is_supported_video_file "$f"; then
-      # 已经处理过（成功或失败）的文件不再重复处理
-      if is_file_in_list "$PROCESSED_LIST" "$f" || is_file_in_list "$FAILED_LIST" "$f"; then
+      # 已经处理过（成功、失败或正在处理）的文件不再重复处理
+      if is_file_in_list "$PROCESSED_LIST" "$f" \
+        || is_file_in_list "$FAILED_LIST" "$f" \
+        || is_file_in_list "$IN_PROGRESS_LIST" "$f"; then
         continue
       fi
 
@@ -226,18 +251,23 @@ find_next_video_file() {
 
 do_stream_file() {
   local file="$1"
-  local stream_url
+  local stream_url log_file cmd
 
   echo "开始推流文件: $file"
 
   # -re 表示按原始帧率读文件，实现“模拟实时推流”
   # 可以根据需要调整编码参数
   stream_url=$(build_stream_url_for_file "$file")
+  log_file="${FFMPEG_LOG_DIR}/$(basename -- "$file").log"
 
-  "$FFMPEG_BIN" -re -stream_loop -1 -i "$file" \
+  cmd="$FFMPEG_BIN -re -stream_loop -1 -i \"$file\" -c:v libx264 -preset veryfast -tune zerolatency -c:a aac -ar 44100 -ac 2 -b:a 128k -f flv \"$stream_url\""
+  echo "FFMPEG_CMD: $cmd > \"$log_file\" 2>&1"
+
+  # 将 ffmpeg 的 stdout/stderr 重定向到文件中，避免刷屏 docker 日志
+  $FFMPEG_BIN -re -stream_loop -1 -i "$file" \
     -c:v libx264 -preset veryfast -tune zerolatency \
     -c:a aac -ar 44100 -ac 2 -b:a 128k \
-    -f flv "$stream_url"
+    -f flv "$stream_url" >"$log_file" 2>&1
 }
 
 process_one_file() {
@@ -257,6 +287,30 @@ process_one_file() {
   # 推流成功后记录成功状态，避免重复推流
   echo "推流成功，记录成功状态: $file"
   mark_file_in_list "$PROCESSED_LIST" "$file"
+}
+
+run_stream_job_background() {
+  # 在后台为单个文件启动一个推流任务：
+  #  - 立即标记为 in_progress，避免轮询时重复启动
+  #  - 任务结束后根据结果写入 processed 或 failed
+  local file="$1"
+
+  if [[ ! -f "$file" ]]; then
+    echo "文件不存在: $file"
+    return 1
+  fi
+
+  mark_file_in_progress "$file"
+
+  (
+    if ! do_stream_file "$file"; then
+      echo "推流失败（后台任务），记录失败状态: $file"
+      mark_file_in_list "$FAILED_LIST" "$file"
+    else
+      echo "推流成功（后台任务），记录成功状态: $file"
+      mark_file_in_list "$PROCESSED_LIST" "$file"
+    fi
+  ) &
 }
 
 process_one_file_event_mode() {
@@ -279,7 +333,8 @@ watch_loop_polling() {
 
   while true; do
     if next_file=$(find_next_video_file); then
-      process_one_file "$next_file"
+      # 使用后台任务推流，可并发处理多个文件
+      run_stream_job_background "$next_file"
     else
       sleep "$POLL_INTERVAL"
     fi
