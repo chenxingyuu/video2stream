@@ -42,6 +42,9 @@ POLL_INTERVAL="${POLL_INTERVAL:-5}"
 # 处理完成后的视频移动到的目录（仅轮询模式使用）
 PROCESSED_DIR="${VIDEO_DIR}/processed"
 
+# 推流失败时的视频移动到的目录（仅轮询模式使用）
+FAILED_DIR="${VIDEO_DIR}/failed"
+
 # 存放每个文件对应推流 PID 的目录（仅 fswatch 事件模式使用）
 # 会把文件路径做简单转义作为文件名，内容为对应 ffmpeg 的 PID
 PID_DIR="${PID_DIR:-${VIDEO_DIR}/.pids}"
@@ -79,6 +82,10 @@ ensure_directories() {
   if [[ ! -d "$PID_DIR" ]]; then
     mkdir -p "$PID_DIR"
   fi
+
+  if [[ ! -d "$FAILED_DIR" ]]; then
+    mkdir -p "$FAILED_DIR"
+  fi
 }
 
 build_stream_url_for_file() {
@@ -89,8 +96,12 @@ build_stream_url_for_file() {
   local file="$1"
   local normalized base url
 
-  # 去掉开头的 /，并把路径分隔符 / 替换为 -
-  normalized=$(printf '%s' "$file" | sed 's,^/,,; s,/, -,g')
+  # 规则：
+  #  - 去掉开头的 /
+  #  - 所有空白字符（含空格）替换为 -
+  #  - 路径分隔符 / 替换为 -
+  # 这样可以避免 RTMP 地址中出现空格
+  normalized=$(printf '%s' "$file" | sed -e 's|^/||' -e 's|[[:space:]]\+|-|g' -e 's|/|-|g')
 
   base="$RTMP_URL"
   if [[ -z "$base" ]]; then
@@ -194,17 +205,24 @@ do_stream_file() {
 
 process_one_file() {
   local file="$1"
-  local base target
+  local base target failed_target
 
   if [[ ! -f "$file" ]]; then
     echo "文件不存在: $file"
     return 1
   fi
 
-  # 推流（阻塞直到 ffmpeg 退出）
-  do_stream_file "$file"
+  # 推流（阻塞直到 ffmpeg 退出），如果失败则仅记录并移动到 failed 目录，不影响主循环
+  if ! do_stream_file "$file"; then
+    echo "推流失败，移动到 failed 目录并跳过该文件: $file"
+    base=$(basename -- "$file")
+    failed_target="${FAILED_DIR}/${base}"
+    mv "$file" "$failed_target"
+    echo "已将失败文件移动到: $failed_target"
+    return 0
+  fi
 
-  # 推流结束后移动到 processed 目录，避免重复推流
+  # 推流成功后移动到 processed 目录，避免重复推流
   base=$(basename -- "$file")
   target="${PROCESSED_DIR}/${base}"
 
