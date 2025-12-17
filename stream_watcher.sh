@@ -39,11 +39,12 @@ fi
 # 可通过环境变量 POLL_INTERVAL 覆盖
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 
-# 处理完成后的视频移动到的目录（仅轮询模式使用）
-PROCESSED_DIR="${VIDEO_DIR}/processed"
-
-# 推流失败时的视频移动到的目录（仅轮询模式使用）
-FAILED_DIR="${VIDEO_DIR}/failed"
+# 轮询模式下的处理状态记录目录（不再移动源视频文件）
+#  - STATE_DIR/processed.list 记录已成功推流的文件（绝对路径）
+#  - STATE_DIR/failed.list    记录推流失败的文件（绝对路径）
+STATE_DIR="${VIDEO_DIR}/.state"
+PROCESSED_LIST="${STATE_DIR}/processed.list"
+FAILED_LIST="${STATE_DIR}/failed.list"
 
 # 存放每个文件对应推流 PID 的目录（仅 fswatch 事件模式使用）
 # 会把文件路径做简单转义作为文件名，内容为对应 ffmpeg 的 PID
@@ -75,16 +76,47 @@ ensure_directories() {
     mkdir -p "$VIDEO_DIR"
   fi
 
-  if [[ ! -d "$PROCESSED_DIR" ]]; then
-    mkdir -p "$PROCESSED_DIR"
-  fi
-
   if [[ ! -d "$PID_DIR" ]]; then
     mkdir -p "$PID_DIR"
   fi
 
-  if [[ ! -d "$FAILED_DIR" ]]; then
-    mkdir -p "$FAILED_DIR"
+  if [[ ! -d "$STATE_DIR" ]]; then
+    mkdir -p "$STATE_DIR"
+  fi
+
+  # 状态文件如果不存在则创建为空文件
+  if [[ ! -f "$PROCESSED_LIST" ]]; then
+    : > "$PROCESSED_LIST"
+  fi
+
+  if [[ ! -f "$FAILED_LIST" ]]; then
+    : > "$FAILED_LIST"
+  fi
+}
+
+is_file_in_list() {
+  local list="$1"
+  local file="$2"
+
+  if [[ ! -f "$list" ]]; then
+    return 1
+  fi
+
+  # 精确匹配整行，避免部分匹配
+  if grep -Fx -- "$file" "$list" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  return 1
+}
+
+mark_file_in_list() {
+  local list="$1"
+  local file="$2"
+
+  # 先检查是否已经存在，避免重复写入
+  if ! is_file_in_list "$list" "$file"; then
+    printf '%s\n' "$file" >> "$list"
   fi
 }
 
@@ -165,7 +197,8 @@ start_stream_background() {
   stream_url=$(build_stream_url_for_file "$file")
 
   "$FFMPEG_BIN" -re -stream_loop -1 -i "$file" \
-    -c copy \
+    -c:v libx264 -preset veryfast -tune zerolatency \
+    -c:a aac -ar 44100 -ac 2 -b:a 128k \
     -f flv "$stream_url" &
 
   pid=$!
@@ -178,6 +211,11 @@ find_next_video_file() {
   local f
   for f in "$VIDEO_DIR"/*; do
     if [[ -f "$f" ]] && is_supported_video_file "$f"; then
+      # 已经处理过（成功或失败）的文件不再重复处理
+      if is_file_in_list "$PROCESSED_LIST" "$f" || is_file_in_list "$FAILED_LIST" "$f"; then
+        continue
+      fi
+
       printf '%s\n' "$f"
       return 0
     fi
@@ -197,35 +235,28 @@ do_stream_file() {
   stream_url=$(build_stream_url_for_file "$file")
 
   "$FFMPEG_BIN" -re -stream_loop -1 -i "$file" \
-    -c copy \
+    -c:v libx264 -preset veryfast -tune zerolatency \
+    -c:a aac -ar 44100 -ac 2 -b:a 128k \
     -f flv "$stream_url"
 }
 
 process_one_file() {
   local file="$1"
-  local base target failed_target
-
   if [[ ! -f "$file" ]]; then
     echo "文件不存在: $file"
     return 1
   fi
 
-  # 推流（阻塞直到 ffmpeg 退出），如果失败则仅记录并移动到 failed 目录，不影响主循环
+  # 推流（阻塞直到 ffmpeg 退出），如果失败则仅记录状态，不影响主循环
   if ! do_stream_file "$file"; then
-    echo "推流失败，移动到 failed 目录并跳过该文件: $file"
-    base=$(basename -- "$file")
-    failed_target="${FAILED_DIR}/${base}"
-    mv "$file" "$failed_target"
-    echo "已将失败文件移动到: $failed_target"
+    echo "推流失败，记录失败状态并跳过该文件: $file"
+    mark_file_in_list "$FAILED_LIST" "$file"
     return 0
   fi
 
-  # 推流成功后移动到 processed 目录，避免重复推流
-  base=$(basename -- "$file")
-  target="${PROCESSED_DIR}/${base}"
-
-  mv "$file" "$target"
-  echo "已将文件移动到: $target"
+  # 推流成功后记录成功状态，避免重复推流
+  echo "推流成功，记录成功状态: $file"
+  mark_file_in_list "$PROCESSED_LIST" "$file"
 }
 
 process_one_file_event_mode() {
