@@ -18,9 +18,10 @@ set -euo pipefail
 # 可通过环境变量 VIDEO_DIR 覆盖
 VIDEO_DIR="${VIDEO_DIR:-/app/videos}"
 
-# 推流的 RTMP 地址（默认指向 docker-compose 中的 zlmediakit 服务）
+# 推流的 RTMP 基础地址（不包含流名，默认指向 docker-compose 中的 zlmediakit 服务）
+# 实际推流地址会是：${RTMP_URL}/{文件名去掉扩展名}
 # 可通过环境变量 RTMP_URL 覆盖
-RTMP_URL="${RTMP_URL:-rtmp://zlmediakit:1935/live/stream}"
+RTMP_URL="${RTMP_URL:-rtmp://zlmediakit:1935/live}"
 
 # ffmpeg 路径（如果在 PATH 里，可直接用 ffmpeg）
 # 可通过环境变量 FFMPEG_BIN 覆盖
@@ -80,6 +81,32 @@ ensure_directories() {
   fi
 }
 
+build_stream_url_for_file() {
+  # 根据“完整路径”生成推流地址：
+  #  - 文件名: /path/to/foo.mp4
+  #  - 基础地址: rtmp://host/live
+  #  - 结果: rtmp://host/live/path-to-foo.mp4
+  local file="$1"
+  local normalized base url
+
+  # 去掉开头的 /，并把路径分隔符 / 替换为 -
+  normalized=$(printf '%s' "$file" | sed 's,^/,,; s,/, -,g')
+
+  base="$RTMP_URL"
+  if [[ -z "$base" ]]; then
+    echo "错误：RTMP_URL 为空，无法构建推流地址" >&2
+    exit 1
+  fi
+
+  if [[ "${base: -1}" == "/" ]]; then
+    url="${base}${normalized}"
+  else
+    url="${base}/${normalized}"
+  fi
+
+  printf '%s\n' "$url"
+}
+
 pidfile_for_path() {
   # 把绝对路径中的 / 和空格等替换掉，避免作为文件名出问题
   local file="$1"
@@ -117,7 +144,7 @@ stop_stream_if_running() {
 
 start_stream_background() {
   local file="$1"
-  local pid_file pid
+  local pid_file pid stream_url
 
   pid_file=$(pidfile_for_path "$file")
 
@@ -126,9 +153,11 @@ start_stream_background() {
 
   echo "开始推流文件（后台运行）: $file"
 
+  stream_url=$(build_stream_url_for_file "$file")
+
   "$FFMPEG_BIN" -re -stream_loop -1 -i "$file" \
     -c copy \
-    -f flv "$RTMP_URL" &
+    -f flv "$stream_url" &
 
   pid=$!
   echo "$pid" > "$pid_file"
@@ -150,14 +179,17 @@ find_next_video_file() {
 
 do_stream_file() {
   local file="$1"
+  local stream_url
 
   echo "开始推流文件: $file"
 
   # -re 表示按原始帧率读文件，实现“模拟实时推流”
   # 可以根据需要调整编码参数
+  stream_url=$(build_stream_url_for_file "$file")
+
   "$FFMPEG_BIN" -re -stream_loop -1 -i "$file" \
     -c copy \
-    -f flv "$RTMP_URL"
+    -f flv "$stream_url"
 }
 
 process_one_file() {

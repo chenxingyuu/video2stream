@@ -62,11 +62,11 @@ cp /path/to/test.mp4 ./videos/
 
 ### 3. 播放推流
 
-在本机上可以用以下地址播放（以默认 ZLMediaKit 配置为例）：
+在本机上可以用以下地址播放（以默认 ZLMediaKit 配置为例），假设你放入的文件为 `/path/to/test.mp4`（相对挂载点）：
 
-- RTMP：`rtmp://127.0.0.1:1935/live/stream`
-- HTTP-FLV：`http://127.0.0.1:8080/live/stream.live.flv`
-- HLS：`http://127.0.0.1:8080/live/stream/hls.m3u8`
+- RTMP：`rtmp://127.0.0.1:1935/live/path-to-test.mp4`
+- HTTP-FLV：`http://127.0.0.1:8080/live/path-to-test.mp4.live.flv`
+- HLS：`http://127.0.0.1:8080/live/path-to-test.mp4/hls.m3u8`
 
 可用 VLC、ffplay 或浏览器（配合前端播放器）进行播放。
 
@@ -89,12 +89,17 @@ cp /path/to/test.mp4 ./videos/
     ```
 
 - **`RTMP_URL`**
-  - 说明：推流目标地址。
-  - 默认：`rtmp://zlmediakit:1935/live/stream`  
+  - 说明：推流基础地址（不含流名），实际推流地址为 `RTMP_URL/{路径归一化文件名}`。
+  - 默认：`rtmp://zlmediakit:1935/live`  
     （在 docker-compose 中指向 `zlmediakit` 服务）
-  - 示例（推到外部 ZLMediaKit）：
+  - “路径归一化文件名”规则：
+    - 去掉路径前导 `/`
+    - 将路径分隔符 `/` 替换为 `-`
+    - 保留扩展名
+    - 例如：`/foo/bar/video.mp4` → `foo-bar-video.mp4`
+  - 示例（推到外部 ZLMediaKit，且以“路径归一化文件名”为 key）：
     ```bash
-    RTMP_URL=rtmp://192.168.1.10:1935/live/stream ./stream_watcher.sh
+    RTMP_URL=rtmp://192.168.1.10:1935/live ./stream_watcher.sh
     ```
 
 - **`FFMPEG_BIN`**
@@ -129,7 +134,7 @@ services:
       dockerfile: Dockerfile
     environment:
       - VIDEO_DIR=/app/videos
-      - RTMP_URL=rtmp://zlmediakit:1935/live/stream
+      - RTMP_URL=rtmp://zlmediakit:1935/live
       - POLL_INTERVAL=5
       # - VIDEO_EXTENSIONS=mp4,flv,mkv,mov,avi
     volumes:
@@ -148,7 +153,7 @@ services:
 chmod +x stream_watcher.sh
 
 VIDEO_DIR=/absolute/path/to/videos \
-RTMP_URL=rtmp://你的ZLM_IP:1935/live/stream \
+RTMP_URL=rtmp://你的ZLM_IP:1935/live \
 POLL_INTERVAL=3 \
 VIDEO_EXTENSIONS=mp4,flv \
 ./stream_watcher.sh

@@ -23,8 +23,9 @@ services:
       # 可根据需要在这里覆盖配置
       # 监听目录（容器内路径）
       - VIDEO_DIR=/app/videos
-      # 推流地址，默认指向上面的 zlmediakit 服务
-      - RTMP_URL=rtmp://zlmediakit:1935/live/stream
+      # 推流基础地址（不含流名），默认指向上面的 zlmediakit 服务
+      # 实际推流地址：rtmp://zlmediakit:1935/live/{文件名去扩展名}
+      - RTMP_URL=rtmp://zlmediakit:1935/live
       # 可选：自定义轮询间隔（秒）
       - POLL_INTERVAL=5
       # 可选：自定义支持的视频后缀（逗号分隔）
