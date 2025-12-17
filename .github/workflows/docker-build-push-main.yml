@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: registry.cn-hangzhou.aliyuncs.com
-  NAMESPACE: video2stream
+  NAMESPACE: daxx
 
 jobs:
   build-and-push:
