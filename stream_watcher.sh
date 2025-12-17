@@ -92,12 +92,14 @@ build_stream_url_for_file() {
   # 根据“文件名”生成推流地址：
   #  - 文件名: /path/to/foo.mp4
   #  - 基础地址: rtmp://host/live
-  #  - 结果: rtmp://host/live/foo.mp4（空白会被替换为 -）
+  #  - 结果: rtmp://host/live/foo（空白会被替换为 -，不带扩展名）
   local file="$1"
-  local normalized base url
+  local name name_no_ext normalized base url
 
-  # 使用 basename 取纯文件名，并将所有空白字符替换为 -
-  normalized=$(basename -- "$file" | sed -e 's|[[:space:]]\+|-|g')
+  # 使用 basename 取纯文件名，去掉扩展名，并将所有空白字符替换为 -
+  name=$(basename -- "$file")
+  name_no_ext="${name%.*}"
+  normalized=$(printf '%s' "$name_no_ext" | sed -e 's|[[:space:]]\+|-|g')
 
   base="$RTMP_URL"
   if [[ -z "$base" ]]; then
