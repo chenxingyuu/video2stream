@@ -89,19 +89,15 @@ ensure_directories() {
 }
 
 build_stream_url_for_file() {
-  # 根据“完整路径”生成推流地址：
+  # 根据“文件名”生成推流地址：
   #  - 文件名: /path/to/foo.mp4
   #  - 基础地址: rtmp://host/live
-  #  - 结果: rtmp://host/live/path-to-foo.mp4
+  #  - 结果: rtmp://host/live/foo.mp4（空白会被替换为 -）
   local file="$1"
   local normalized base url
 
-  # 规则：
-  #  - 去掉开头的 /
-  #  - 所有空白字符（含空格）替换为 -
-  #  - 路径分隔符 / 替换为 -
-  # 这样可以避免 RTMP 地址中出现空格
-  normalized=$(printf '%s' "$file" | sed -e 's|^/||' -e 's|[[:space:]]\+|-|g' -e 's|/|-|g')
+  # 使用 basename 取纯文件名，并将所有空白字符替换为 -
+  normalized=$(basename -- "$file" | sed -e 's|[[:space:]]\+|-|g')
 
   base="$RTMP_URL"
   if [[ -z "$base" ]]; then
