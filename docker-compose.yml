@@ -1,0 +1,36 @@
+version: "3.8"
+
+services:
+  zlmediakit:
+    image: zlmediakit/zlmediakit:master
+    container_name: zlmediakit
+    restart: unless-stopped
+    ports:
+      - "1935:1935"   # RTMP
+      - "554:554"     # RTSP
+      - "8000:80"     # Web 管理 / API（镜像内部默认 80）
+      - "8080:8080"   # HTTP-FLV / HLS 等
+
+  video2stream-watcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: video2stream-watcher
+    restart: unless-stopped
+    depends_on:
+      - zlmediakit
+    environment:
+      # 可根据需要在这里覆盖配置
+      # 监听目录（容器内路径）
+      - VIDEO_DIR=/app/videos
+      # 推流地址，默认指向上面的 zlmediakit 服务
+      - RTMP_URL=rtmp://zlmediakit:1935/live/stream
+      # 可选：自定义轮询间隔（秒）
+      - POLL_INTERVAL=5
+      # 可选：自定义支持的视频后缀（逗号分隔）
+      # - VIDEO_EXTENSIONS=mp4,flv,mkv,mov,avi
+    volumes:
+      # 将宿主机的视频目录挂载进容器
+      - ./videos:/app/videos
+
+
