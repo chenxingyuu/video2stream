@@ -3,12 +3,14 @@ FROM golang:1.21-alpine AS builder
 
 WORKDIR /build
 
-# 复制 Go 模块文件
-COPY go.mod go.sum* ./
-RUN go mod download
-
-# 复制源代码并构建
+# 复制 Go 模块文件和源代码
+COPY go.mod ./
 COPY main.go ./
+
+# 下载依赖并生成 go.sum（如果不存在）
+RUN go mod download && go mod tidy
+
+# 构建二进制文件
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o video2stream-api .
 
 # 第二阶段：最终镜像
