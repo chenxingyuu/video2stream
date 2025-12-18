@@ -39,14 +39,21 @@ fi
 # 可通过环境变量 POLL_INTERVAL 覆盖
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 
+# 推流失败重试次数（只在轮询模式下生效）
+#  - >0：失败达到该次数后会被标记为失败，不再重试
+#  - <=0：表示无限重试，永不标记为失败
+RETRY_MAX_ATTEMPTS="${RETRY_MAX_ATTEMPTS:-3}"
+
 # 轮询模式下的处理状态记录目录（不再移动源视频文件）
-#  - STATE_DIR/processed.list   记录已成功推流的文件（绝对路径）
-#  - STATE_DIR/failed.list      记录推流失败的文件（绝对路径）
-#  - STATE_DIR/in_progress.list 记录正在推流中的文件（绝对路径）
+#  - STATE_DIR/processed.list    记录已成功推流的文件（绝对路径）
+#  - STATE_DIR/failed.list       记录推流失败的文件（绝对路径，已达到最大重试次数）
+#  - STATE_DIR/in_progress.list  记录正在推流中的文件（绝对路径）
+#  - STATE_DIR/retry.list        记录每个文件已失败的次数（格式：<path>|<count>）
 STATE_DIR="${VIDEO_DIR}/.state"
 PROCESSED_LIST="${STATE_DIR}/processed.list"
 FAILED_LIST="${STATE_DIR}/failed.list"
 IN_PROGRESS_LIST="${STATE_DIR}/in_progress.list"
+RETRY_LIST="${STATE_DIR}/retry.list"
 
 # ffmpeg 日志目录（按文件名输出到独立日志，避免刷屏 docker 日志）
 FFMPEG_LOG_DIR="${STATE_DIR}/ffmpeg_logs"
@@ -105,6 +112,10 @@ ensure_directories() {
   if [[ ! -f "$IN_PROGRESS_LIST" ]]; then
     : > "$IN_PROGRESS_LIST"
   fi
+
+  if [[ ! -f "$RETRY_LIST" ]]; then
+    : > "$RETRY_LIST"
+  fi
 }
 
 is_file_in_list() {
@@ -136,6 +147,90 @@ mark_file_in_list() {
 mark_file_in_progress() {
   local file="$1"
   mark_file_in_list "$IN_PROGRESS_LIST" "$file"
+}
+
+remove_file_from_list() {
+  local list="$1"
+  local file="$2"
+
+  if [[ ! -f "$list" ]]; then
+    return 0
+  fi
+
+  # 删除匹配该路径的整行
+  local tmp
+  tmp="${list}.tmp.$$"
+  if ! grep -Fvx -- "$file" "$list" >"$tmp" 2>/dev/null; then
+    # 如果 grep 失败（例如没找到匹配），保留原文件内容
+    cp "$list" "$tmp" 2>/dev/null || :
+  fi
+  mv "$tmp" "$list"
+}
+
+get_retry_count() {
+  local file="$1"
+  local line count
+
+  if [[ ! -f "$RETRY_LIST" ]]; then
+    printf '%s\n' "0"
+    return 0
+  fi
+
+  # 行格式：<path>|<count>
+  line=$(grep -F -- "$file|" "$RETRY_LIST" 2>/dev/null | head -n 1 || true)
+  if [[ -z "$line" ]]; then
+    printf '%s\n' "0"
+    return 0
+  fi
+
+  count="${line##*|}"
+  if [[ -z "$count" ]]; then
+    printf '%s\n' "0"
+  else
+    printf '%s\n' "$count"
+  fi
+}
+
+set_retry_count() {
+  local file="$1"
+  local count="$2"
+  local tmp
+
+  if [[ ! -f "$RETRY_LIST" ]]; then
+    : > "$RETRY_LIST"
+  fi
+
+  tmp="${RETRY_LIST}.tmp.$$"
+  # 删除旧记录
+  if ! grep -Fv -- "$file|" "$RETRY_LIST" >"$tmp" 2>/dev/null; then
+    cp "$RETRY_LIST" "$tmp" 2>/dev/null || :
+  fi
+  printf '%s|%s\n' "$file" "$count" >>"$tmp"
+  mv "$tmp" "$RETRY_LIST"
+}
+
+increment_retry_and_should_stop() {
+  # 返回 0 表示还可以重试，返回 1 表示达到上限，应标记为失败
+  local file="$1"
+  local current next
+
+  current=$(get_retry_count "$file")
+  next=$((current + 1))
+  set_retry_count "$file" "$next"
+
+  # RETRY_MAX_ATTEMPTS <= 0 表示无限重试
+  if [[ "${RETRY_MAX_ATTEMPTS:-0}" -le 0 ]]; then
+    echo "文件推流失败，将无限重试（当前失败次数: ${next})：$file"
+    return 0
+  fi
+
+  if [[ "$next" -ge "$RETRY_MAX_ATTEMPTS" ]]; then
+    echo "文件已达到最大重试次数(${RETRY_MAX_ATTEMPTS})，将标记为失败: $file"
+    return 1
+  fi
+
+  echo "文件推流失败，将在后续轮询中重试（当前失败次数: ${next}/${RETRY_MAX_ATTEMPTS}）: $file"
+  return 0
 }
 
 build_stream_url_for_file() {
@@ -304,12 +399,20 @@ run_stream_job_background() {
 
   (
     if ! do_stream_file "$file"; then
-      echo "推流失败（后台任务），记录失败状态: $file"
-      mark_file_in_list "$FAILED_LIST" "$file"
+      echo "推流失败（后台任务）: $file"
+      if ! increment_retry_and_should_stop "$file"; then
+        # 未达到最大重试次数，本次失败仅记录重试次数，不加入 FAILED_LIST
+        :
+      else
+        # 达到最大次数，标记为失败
+        mark_file_in_list "$FAILED_LIST" "$file"
+      fi
     else
       echo "推流成功（后台任务），记录成功状态: $file"
       mark_file_in_list "$PROCESSED_LIST" "$file"
     fi
+    # 无论成功或失败，任务结束时都要从 in_progress 中移除
+    remove_file_from_list "$IN_PROGRESS_LIST" "$file"
   ) &
 }
 

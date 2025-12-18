@@ -1,3 +1,17 @@
+# 第一阶段：构建 Go HTTP 服务
+FROM golang:1.21-alpine AS builder
+
+WORKDIR /build
+
+# 复制 Go 模块文件
+COPY go.mod go.sum* ./
+RUN go mod download
+
+# 复制源代码并构建
+COPY main.go ./
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o video2stream-api .
+
+# 第二阶段：最终镜像
 FROM alpine:3.20
 
 LABEL maintainer="video2stream"
@@ -12,18 +26,24 @@ RUN apk add --no-cache \
     bash \
   && mkdir -p /app/videos
 
+# 从构建阶段复制 Go 服务二进制文件
+COPY --from=builder /build/video2stream-api /app/video2stream-api
+
 # 拷贝脚本
 COPY stream_watcher.sh /app/stream_watcher.sh
 
-RUN chmod +x /app/stream_watcher.sh
+RUN chmod +x /app/stream_watcher.sh /app/video2stream-api
 
 # 默认环境变量（可被外部覆盖）
 ENV VIDEO_DIR=/app/videos \
-    RTMP_URL=rtmp://zlmediakit:1935/live/stream \
+    RTMP_URL=rtmp://zlmediakit:1935/live \
     FFMPEG_BIN=ffmpeg \
-    POLL_INTERVAL=5
+    POLL_INTERVAL=5 \
+    HTTP_PORT=8081 \
+    WATCHER_SCRIPT=/app/stream_watcher.sh
 
-# 默认命令：启动监听脚本
-CMD ["/app/stream_watcher.sh"]
+# 暴露 HTTP API 端口
+EXPOSE 8081
 
-
+# 默认命令：启动 Go HTTP 服务（它会管理 stream_watcher.sh 的启动/停止）
+CMD ["/app/video2stream-api"]

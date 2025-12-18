@@ -19,6 +19,8 @@ services:
     restart: unless-stopped
     depends_on:
       - zlmediakit
+    ports:
+      - "8081:8081"   # HTTP API 端口
     environment:
       # 可根据需要在这里覆盖配置
       # 监听目录（容器内路径）
@@ -28,8 +30,12 @@ services:
       - RTMP_URL=rtmp://zlmediakit:1935/live
       # 可选：自定义轮询间隔（秒）
       - POLL_INTERVAL=5
+      # HTTP API 端口
+      - HTTP_PORT=8081
       # 可选：自定义支持的视频后缀（逗号分隔）
       # - VIDEO_EXTENSIONS=mp4,flv,mkv,mov,avi
+      # 可选：失败重试次数（<=0 表示无限重试）
+      # - RETRY_MAX_ATTEMPTS=0
     volumes:
       # 将宿主机的视频目录挂载进容器
       - ./videos:/app/videos
