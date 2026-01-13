@@ -313,14 +313,17 @@ start_stream_background() {
   stream_url=$(build_stream_url_for_file "$file")
   log_file="${FFMPEG_LOG_DIR}/$(basename -- "$file").log"
 
-  cmd="$FFMPEG_BIN -re -stream_loop -1 -i \"$file\" -vf \"drawtext=text='%{localtime\\\\:%Y-%m-%d %H\\\\\\\\:\\\\\\\\:M\\\\\\\\:\\\\\\\\:S}':fontsize=24:fontcolor=white:x=w-tw-10:y=10\" -c:v libx264 -preset veryfast -tune zerolatency -an -f flv \"$stream_url\""
+  # 构建 drawtext 滤镜（显示当前系统时间）
+  # 注意：已安装 ttf-dejavu 字体，drawtext 可以正常工作
+  cmd="$FFMPEG_BIN -re -stream_loop -1 -i \"$file\" -vf \"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='%{localtime}':fontsize=24:fontcolor=white:x=w-tw-10:y=10\" -c:v libx264 -preset veryfast -tune zerolatency -an -f flv \"$stream_url\""
   echo "FFMPEG_CMD (background): $cmd > \"$log_file\" 2>&1"
 
   # 实际执行时将 ffmpeg 日志写入独立文件，避免刷屏 docker 日志
   # -an 表示不包含音频流
-  # -vf drawtext 在右上角显示时间戳（格式：YYYY-MM-DD HH:MM:SS）
+  # -vf drawtext 在右上角显示当前系统时间（格式由 ffmpeg 自动决定）
+  # 使用 fontfile 指定字体路径，确保在 Alpine 中正常工作
   $FFMPEG_BIN -re -stream_loop -1 -i "$file" \
-    -vf "drawtext=text='%{localtime\:%Y-%m-%d %H\\:%M\\:%S}':fontsize=24:fontcolor=white:x=w-tw-10:y=10" \
+    -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='%{localtime}':fontsize=24:fontcolor=white:x=w-tw-10:y=10" \
     -c:v libx264 -preset veryfast -tune zerolatency \
     -an \
     -f flv "$stream_url" >"$log_file" 2>&1 &
@@ -361,14 +364,17 @@ do_stream_file() {
   stream_url=$(build_stream_url_for_file "$file")
   log_file="${FFMPEG_LOG_DIR}/$(basename -- "$file").log"
 
-  cmd="$FFMPEG_BIN -re -stream_loop -1 -i \"$file\" -vf \"drawtext=text='%{localtime\\\\:%Y-%m-%d %H\\\\\\\\:\\\\\\\\:M\\\\\\\\:\\\\\\\\:S}':fontsize=24:fontcolor=white:x=w-tw-10:y=10\" -c:v libx264 -preset veryfast -tune zerolatency -an -f flv \"$stream_url\""
+  # 构建 drawtext 滤镜（显示当前系统时间）
+  # 注意：已安装 ttf-dejavu 字体，drawtext 可以正常工作
+  cmd="$FFMPEG_BIN -re -stream_loop -1 -i \"$file\" -vf \"drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='%{localtime}':fontsize=24:fontcolor=white:x=w-tw-10:y=10\" -c:v libx264 -preset veryfast -tune zerolatency -an -f flv \"$stream_url\""
   echo "FFMPEG_CMD: $cmd > \"$log_file\" 2>&1"
 
   # 将 ffmpeg 的 stdout/stderr 重定向到文件中，避免刷屏 docker 日志
   # -an 表示不包含音频流
-  # -vf drawtext 在右上角显示时间戳（格式：YYYY-MM-DD HH:MM:SS）
+  # -vf drawtext 在右上角显示当前系统时间（格式由 ffmpeg 自动决定）
+  # 使用 fontfile 指定字体路径，确保在 Alpine 中正常工作
   $FFMPEG_BIN -re -stream_loop -1 -i "$file" \
-    -vf "drawtext=text='%{localtime\:%Y-%m-%d %H\\:%M\\:%S}':fontsize=24:fontcolor=white:x=w-tw-10:y=10" \
+    -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='%{localtime}':fontsize=24:fontcolor=white:x=w-tw-10:y=10" \
     -c:v libx264 -preset veryfast -tune zerolatency \
     -an \
     -f flv "$stream_url" >"$log_file" 2>&1
