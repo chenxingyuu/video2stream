@@ -57,7 +57,8 @@ IN_PROGRESS_LIST="${STATE_DIR}/in_progress.list"
 RETRY_LIST="${STATE_DIR}/retry.list"
 
 # ffmpeg 日志目录（按文件名输出到独立日志，避免刷屏 docker 日志）
-FFMPEG_LOG_DIR="${STATE_DIR}/ffmpeg_logs"
+# 默认放在 /app/.logs，与状态目录分离
+FFMPEG_LOG_DIR="${FFMPEG_LOG_DIR:-/app/ffmpeg_logs}"
 
 # 存放每个文件对应推流 PID 的目录（仅 fswatch 事件模式使用）
 # 会把文件路径做简单转义作为文件名，内容为对应 ffmpeg 的 PID
