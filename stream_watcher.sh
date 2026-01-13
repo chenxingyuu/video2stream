@@ -49,7 +49,8 @@ RETRY_MAX_ATTEMPTS="${RETRY_MAX_ATTEMPTS:-3}"
 #  - STATE_DIR/failed.list       记录推流失败的文件（绝对路径，已达到最大重试次数）
 #  - STATE_DIR/in_progress.list  记录正在推流中的文件（绝对路径）
 #  - STATE_DIR/retry.list        记录每个文件已失败的次数（格式：<path>|<count>）
-STATE_DIR="${VIDEO_DIR}/.state"
+# 默认放在 /app/.state，与视频目录分离
+STATE_DIR="${STATE_DIR:-/app/.state}"
 PROCESSED_LIST="${STATE_DIR}/processed.list"
 FAILED_LIST="${STATE_DIR}/failed.list"
 IN_PROGRESS_LIST="${STATE_DIR}/in_progress.list"
@@ -60,7 +61,8 @@ FFMPEG_LOG_DIR="${STATE_DIR}/ffmpeg_logs"
 
 # 存放每个文件对应推流 PID 的目录（仅 fswatch 事件模式使用）
 # 会把文件路径做简单转义作为文件名，内容为对应 ffmpeg 的 PID
-PID_DIR="${PID_DIR:-${VIDEO_DIR}/.pids}"
+# 默认放在 /app/.pids，与视频目录分离
+PID_DIR="${PID_DIR:-/app/.pids}"
 
 ###############################################################################
 # 函数定义（保证所有函数在使用前定义）
