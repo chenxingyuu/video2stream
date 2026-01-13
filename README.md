@@ -157,6 +157,37 @@ curl -X POST http://127.0.0.1:8081/api/stream/restart
     RETRY_MAX_ATTEMPTS=0 ./stream_watcher.sh
     ```
 
+- **`FFMPEG_VIDEO_CODEC`**
+  - 说明：ffmpeg 视频编码器配置。
+  - 默认：`copy`（直接复制视频流，不重新编码，性能最优）
+  - 可选值：
+    - `copy`：直接复制，不重新编码
+    - `libx264`：使用 H.264 编码器重新编码
+    - `libx265`：使用 H.265 编码器重新编码
+    - 也可以包含编码参数，用空格分隔，例如：`libx264 -preset veryfast -tune zerolatency -threads 0`
+  - 示例（使用 H.264 重新编码）：
+    ```bash
+    FFMPEG_VIDEO_CODEC=libx264 ./stream_watcher.sh
+    ```
+  - 示例（使用 H.264 并指定编码参数）：
+    ```bash
+    FFMPEG_VIDEO_CODEC="libx264 -preset veryfast -tune zerolatency -threads 0" ./stream_watcher.sh
+    ```
+
+- **`FFMPEG_VIDEO_FILTER`**
+  - 说明：ffmpeg 视频滤镜配置（如添加时间戳、缩放等）。
+  - 默认：空（不使用滤镜）
+  - 常用示例：
+    - 添加时间戳文字：
+      ```bash
+      FFMPEG_VIDEO_FILTER="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='%{localtime}':fontsize=24:fontcolor=white:x=w-tw-10:y=10"
+      ```
+    - 先缩放再添加时间戳：
+      ```bash
+      FFMPEG_VIDEO_FILTER="scale=1920:-1:force_original_aspect_ratio=decrease,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='%{localtime}':fontsize=24:fontcolor=white:x=w-tw-10:y=10"
+      ```
+  - 注意：多个滤镜用逗号分隔，滤镜参数中的单引号需要用双引号包裹整个值
+
 - **`PID_DIR`**
   - 说明：事件模式下记录每个文件推流 PID 的目录。
   - 默认：`$VIDEO_DIR/.pids`
@@ -201,6 +232,12 @@ services:
       # - RETRY_MAX_ATTEMPTS=0
       # 可选：禁用自动启动推流脚本
       # - AUTO_START=false
+      # 可选：ffmpeg 视频编码器配置
+      # - FFMPEG_VIDEO_CODEC=copy  # 默认：直接复制，不重新编码（性能最优）
+      # - FFMPEG_VIDEO_CODEC=libx264  # 使用 H.264 编码器重新编码
+      # - FFMPEG_VIDEO_CODEC="libx264 -preset veryfast -tune zerolatency -threads 0"  # 带编码参数
+      # 可选：ffmpeg 视频滤镜配置（如添加时间戳文字）
+      # - FFMPEG_VIDEO_FILTER="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='%{localtime}':fontsize=24:fontcolor=white:x=w-tw-10:y=10"
     volumes:
       - ./videos:/app/videos
 ```

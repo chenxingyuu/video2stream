@@ -36,6 +36,12 @@ services:
       # - VIDEO_EXTENSIONS=mp4,flv,mkv,mov,avi
       # 可选：失败重试次数（<=0 表示无限重试）
       # - RETRY_MAX_ATTEMPTS=0
+      # 可选：ffmpeg 视频编码器配置
+      # - FFMPEG_VIDEO_CODEC=copy  # 默认：直接复制，不重新编码（性能最优）
+      # - FFMPEG_VIDEO_CODEC=libx264  # 使用 H.264 编码器重新编码
+      # - FFMPEG_VIDEO_CODEC="libx264 -preset veryfast -tune zerolatency -threads 0"  # 带编码参数
+      # 可选：ffmpeg 视频滤镜配置（如添加时间戳文字）
+      # - FFMPEG_VIDEO_FILTER="drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='%{localtime}':fontsize=24:fontcolor=white:x=w-tw-10:y=10"
     volumes:
       # 将宿主机的视频目录挂载进容器
       - ./videos:/app/videos

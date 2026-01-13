@@ -65,6 +65,25 @@ FFMPEG_LOG_DIR="${FFMPEG_LOG_DIR:-/app/ffmpeg_logs}"
 # 默认放在 /app/.pids，与视频目录分离
 PID_DIR="${PID_DIR:-/app/.pids}"
 
+# ffmpeg 视频编码器配置
+# 可通过环境变量 FFMPEG_VIDEO_CODEC 覆盖
+# 示例值：
+#   - "copy"：直接复制视频流，不重新编码（默认，性能最优）
+#   - "libx264"：使用 H.264 编码器重新编码
+#   - "libx265"：使用 H.265 编码器重新编码
+# 如果使用编码器，可以配合其他参数，例如：
+#   "libx264 -preset veryfast -tune zerolatency -threads 0"
+FFMPEG_VIDEO_CODEC="${FFMPEG_VIDEO_CODEC:-copy}"
+
+# ffmpeg 视频滤镜配置
+# 可通过环境变量 FFMPEG_VIDEO_FILTER 覆盖
+# 示例值：
+#   - ""：不使用滤镜（默认）
+#   - "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:text='%{localtime}':fontsize=24:fontcolor=white:x=w-tw-10:y=10"
+#   - "scale=1920:-1:force_original_aspect_ratio=decrease,drawtext=..."
+# 多个滤镜用逗号分隔
+FFMPEG_VIDEO_FILTER="${FFMPEG_VIDEO_FILTER:-}"
+
 ###############################################################################
 # 函数定义（保证所有函数在使用前定义）
 ###############################################################################
@@ -273,6 +292,59 @@ pidfile_for_path() {
   printf '%s/%s.pid\n' "$PID_DIR" "$safe"
 }
 
+build_ffmpeg_cmd() {
+  # 构建 ffmpeg 命令的参数数组
+  # 参数：$1=输入文件, $2=输出地址
+  # 返回：通过全局数组 FFMPEG_CMD_ARGS 返回命令参数
+  local file="$1"
+  local output="$2"
+  local codec_name codec_args
+
+  FFMPEG_CMD_ARGS=(
+    -re
+    -stream_loop
+    -1
+    -i
+    "$file"
+  )
+
+  # 如果有视频滤镜，添加 -vf 参数
+  if [[ -n "$FFMPEG_VIDEO_FILTER" ]]; then
+    FFMPEG_CMD_ARGS+=(-vf "$FFMPEG_VIDEO_FILTER")
+  fi
+
+  # 添加视频编码器参数
+  if [[ "$FFMPEG_VIDEO_CODEC" == "copy" ]]; then
+    FFMPEG_CMD_ARGS+=(-c:v copy)
+  else
+    # 解析编码器配置：格式为 "编码器名称" 或 "编码器名称 参数1 参数2 ..."
+    # 例如："libx264" 或 "libx264 -preset veryfast -tune zerolatency"
+    codec_name="${FFMPEG_VIDEO_CODEC%% *}"
+    codec_args="${FFMPEG_VIDEO_CODEC#* }"
+    
+    # 添加编码器
+    FFMPEG_CMD_ARGS+=(-c:v "$codec_name")
+    
+    # 如果有额外参数，按空格拆分并添加
+    if [[ "$codec_args" != "$FFMPEG_VIDEO_CODEC" ]]; then
+      IFS=' ' read -r -a args_array <<< "$codec_args"
+      for arg in "${args_array[@]}"; do
+        if [[ -n "$arg" ]]; then
+          FFMPEG_CMD_ARGS+=("$arg")
+        fi
+      done
+    fi
+  fi
+
+  # 添加音频和输出格式参数
+  FFMPEG_CMD_ARGS+=(
+    -an
+    -f
+    flv
+    "$output"
+  )
+}
+
 stop_stream_if_running() {
   local file="$1"
   local pid_file pid
@@ -301,7 +373,7 @@ stop_stream_if_running() {
 
 start_stream_background() {
   local file="$1"
-  local pid_file pid stream_url log_file cmd
+  local pid_file pid stream_url log_file
 
   pid_file=$(pidfile_for_path "$file")
 
@@ -313,17 +385,14 @@ start_stream_background() {
   stream_url=$(build_stream_url_for_file "$file")
   log_file="${FFMPEG_LOG_DIR}/$(basename -- "$file").log"
 
-  # 使用 copy 模式，不重新编码，性能最优
-  cmd="$FFMPEG_BIN -re -stream_loop -1 -i \"$file\" -c:v copy -an -f flv \"$stream_url\""
-  echo "FFMPEG_CMD (background): $cmd > \"$log_file\" 2>&1"
+  # 构建 ffmpeg 命令
+  build_ffmpeg_cmd "$file" "$stream_url"
+
+  # 打印命令（用于调试）
+  echo "FFMPEG_CMD (background): $FFMPEG_BIN ${FFMPEG_CMD_ARGS[*]} > \"$log_file\" 2>&1"
 
   # 实际执行时将 ffmpeg 日志写入独立文件，避免刷屏 docker 日志
-  # -an 表示不包含音频流
-  # -c:v copy 直接复制视频流，不重新编码，性能最优
-  $FFMPEG_BIN -re -stream_loop -1 -i "$file" \
-    -c:v copy \
-    -an \
-    -f flv "$stream_url" >"$log_file" 2>&1 &
+  "$FFMPEG_BIN" "${FFMPEG_CMD_ARGS[@]}" >"$log_file" 2>&1 &
 
   pid=$!
   echo "$pid" > "$pid_file"
@@ -352,7 +421,7 @@ find_next_video_file() {
 
 do_stream_file() {
   local file="$1"
-  local stream_url log_file cmd
+  local stream_url log_file
 
   echo "开始推流文件: $file"
 
@@ -360,17 +429,14 @@ do_stream_file() {
   stream_url=$(build_stream_url_for_file "$file")
   log_file="${FFMPEG_LOG_DIR}/$(basename -- "$file").log"
 
-  # 使用 copy 模式，不重新编码，性能最优
-  cmd="$FFMPEG_BIN -re -stream_loop -1 -i \"$file\" -c:v copy -an -f flv \"$stream_url\""
-  echo "FFMPEG_CMD: $cmd > \"$log_file\" 2>&1"
+  # 构建 ffmpeg 命令
+  build_ffmpeg_cmd "$file" "$stream_url"
+
+  # 打印命令（用于调试）
+  echo "FFMPEG_CMD: $FFMPEG_BIN ${FFMPEG_CMD_ARGS[*]} > \"$log_file\" 2>&1"
 
   # 将 ffmpeg 的 stdout/stderr 重定向到文件中，避免刷屏 docker 日志
-  # -an 表示不包含音频流
-  # -c:v copy 直接复制视频流，不重新编码，性能最优
-  $FFMPEG_BIN -re -stream_loop -1 -i "$file" \
-    -c:v copy \
-    -an \
-    -f flv "$stream_url" >"$log_file" 2>&1
+  "$FFMPEG_BIN" "${FFMPEG_CMD_ARGS[@]}" >"$log_file" 2>&1
 }
 
 process_one_file() {
